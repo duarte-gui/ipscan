@@ -86,11 +86,13 @@ flood. If the kernel still drops frames, the program says so.
 | `APIPA` | fell back to 169.254/16: DHCP failed | high |
 | `ORPHAN_LEASE` | lease on record, MAC no longer present | info |
 
-`NO_LEASE` only fires when the session has a **DHCP baseline**: a `--leases-file`
-loaded, or at least one DHCPACK observed on the wire. With neither source the
-flag stays quiet — not seeing a lease is not the same as there being none, and
-accusing everyone on missing data would drown the finding that matters. Even
-with a baseline, `NO_LEASE` alone is common (every legitimately static host has
+`NO_LEASE` only fires when a **`--leases-file` was loaded**, because only the
+file is a complete picture of who holds a lease. Sniffing a lone DHCPACK proves
+a DHCP server exists and says nothing about any other host: renewals are hours
+apart, so a few seconds on the wire catch almost none of them. Without the file
+the flag stays quiet — not seeing a lease is not the same as there being none,
+and accusing everyone on missing data would drown the finding that matters. Even
+with the file, `NO_LEASE` alone is common (every legitimately static host has
 it). The strong signals are `OUTSIDE_SUBNET` and `L2_ONLY`.
 
 ## Interactive interface (TUI)

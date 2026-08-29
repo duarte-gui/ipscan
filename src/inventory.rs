@@ -69,6 +69,12 @@ pub struct Inventory {
     pub hosts: BTreeMap<MacAddr, Host>,
     /// Leases on record whose MAC never showed up any other way.
     pub orphan_leases: BTreeMap<MacAddr, Lease>,
+    /// A lease file was loaded for this session. This is the only complete
+    /// picture of who holds a lease: sniffing catches a DHCPACK now and then,
+    /// but renewals are hours apart, so a stray ACK says a DHCP server exists
+    /// and nothing at all about any other host. Correlation relies on this to
+    /// decide whether "no lease" is evidence or merely missing data.
+    pub lease_file_loaded: bool,
 }
 
 impl Inventory {
@@ -148,6 +154,9 @@ impl Inventory {
 
     /// Injects leases read from a DHCP server's lease file.
     pub fn merge_lease_file(&mut self, leases: Vec<(MacAddr, Lease)>) {
+        // Set even for an empty file: an empty authoritative list still means
+        // "nobody holds a lease", which is a real answer rather than silence.
+        self.lease_file_loaded = true;
         for (mac, lease) in leases {
             match self.hosts.get_mut(&mac) {
                 Some(h) => {

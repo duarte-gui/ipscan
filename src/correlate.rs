@@ -107,11 +107,13 @@ pub struct Finding {
 
 pub fn analyze(inv: &Inventory, expected: &[Ipv4Net], oui: &OuiDb) -> Vec<Finding> {
     let dup = duplicate_ips(inv);
-    // "I saw no lease" is only evidence if there was a way to see one: a lease
-    // file loaded, or at least one DHCPACK observed on the wire. With neither
-    // source, a missing lease is missing data — and accusing everyone would
-    // drown the one finding that matters.
-    let dhcp_baseline = inv.hosts.values().any(|h| h.lease.is_some());
+    // "I saw no lease" is only evidence when a lease FILE was loaded, because
+    // only the file is a complete picture. Sniffing a single DHCPACK proves a
+    // DHCP server exists and says nothing about any other host: leases renew
+    // hours apart, so in a few seconds on the wire we see almost none of them.
+    // Treating one stray ACK as a baseline flagged every host on the network —
+    // missing data dressed up as a finding, drowning the one that mattered.
+    let dhcp_baseline = inv.lease_file_loaded;
     let mut out = Vec::new();
 
     for host in inv.hosts.values() {
@@ -298,7 +300,7 @@ mod tests {
     }
 
     #[test]
-    fn no_lease_needs_a_dhcp_baseline() {
+    fn no_lease_needs_a_lease_file() {
         let oui = OuiDb::load();
         let mut inv = Inventory::new();
         let silent = MacAddr::new(0xf0, 0xda, 0x5e, 0x54, 0xfc, 0xee);
@@ -309,8 +311,8 @@ mod tests {
             ip: Ipv4Addr::new(192, 168, 1, 25),
             src: Source::ArpReply,
         });
-        // One lease source (file or DHCPACK) is enough to have something to
-        // compare against — from then on, absence starts to mean something.
+        // A loaded lease file is the complete picture, so from here on the
+        // absence of a lease genuinely means something.
         inv.merge_lease_file(vec![(
             leased,
             crate::dhcp::Lease {
@@ -324,6 +326,34 @@ mod tests {
         let fs = analyze(&inv, &expected(), &oui);
         assert!(has(find(&fs, &silent.to_string()), "NO_LEASE"));
         assert!(!has(find(&fs, &leased.to_string()), "NO_LEASE"));
+    }
+
+    #[test]
+    fn a_sniffed_dhcpack_alone_is_not_a_baseline() {
+        // Measured on a live network: exactly one DHCPACK was captured — this
+        // machine's own renewal — and it turned NO_LEASE on for all 23 other
+        // hosts, about which nothing had been learned. One ACK proves a server
+        // exists, not that host X went without a lease.
+        let oui = OuiDb::load();
+        let mut inv = Inventory::new();
+        let silent = MacAddr::new(0xf0, 0xda, 0x5e, 0x54, 0xfc, 0xee);
+        let renewing = MacAddr::new(0xf0, 0xda, 0x5e, 0x54, 0xfc, 0xef);
+        inv.apply(Event::V4 { mac: silent, ip: Ipv4Addr::new(192, 168, 1, 24), src: Source::ArpReply });
+        inv.apply(Event::Dhcp(Box::new(crate::dhcp::DhcpObservation {
+            client_mac: renewing,
+            msg_type: crate::dhcp::MsgType::Ack,
+            assigned: Some(Ipv4Addr::new(192, 168, 1, 25)),
+            requested: None,
+            hostname: None,
+            lease_secs: None,
+            server: Some(Ipv4Addr::new(192, 168, 1, 1)),
+        })));
+
+        let fs = analyze(&inv, &expected(), &oui);
+        // The ACK was recorded as a lease for its own host...
+        assert_eq!(find(&fs, &renewing.to_string()).lease.as_deref(), Some("192.168.1.25"));
+        // ...but it must not turn every other host into a NO_LEASE finding.
+        assert!(!has(find(&fs, &silent.to_string()), "NO_LEASE"));
     }
 
     #[test]
